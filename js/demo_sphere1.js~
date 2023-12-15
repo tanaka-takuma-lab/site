@@ -1,0 +1,181 @@
+var N = 20, M = 3, Z = 4, Ksize = 5;
+var t = 0, dt = 0.01;
+var unitsize = 400, ballradius = 20;
+var S = 600;
+var camera, scene, renderer;
+var ball = new Array(N);
+var K = numeric.rep([M, M], 0);
+var eig = new Array(N), x = numeric.rep([N, M], 0);
+var canvas;
+
+init();
+animate();
+
+function nrand() {
+    var x1, x2, rad;
+    do {
+	x1 = 2*numeric.seedrandom.random()-1;
+	x2 = 2*numeric.seedrandom.random()-1;
+	rad = x1*x1+x2*x2;
+    } while (rad>=1 || rad==0);
+    var c = Math.sqrt(-2*Math.log(rad)/rad);
+    return x1*c;
+}
+
+function init_numerics() {
+    for (var i=0 ; i<M ; i++) {
+	for (var j=0 ; j<M ; j++) {
+	    K[i][j] = nrand();
+	}
+    }
+    for (var i=0 ; i<M ; i++) {
+	numeric.diveq(K[i], numeric.norm2(K[i]));
+	for (var j=i+1 ; j<M ; j++) {
+	    numeric.subeq(K[j], numeric.dot(K[i], K[j]));
+	}
+    }
+    numeric.muleq(K, Ksize);
+    var mu0 = new Array(Z), gamma0 = new Array(Z), W = new Array(Z);
+    for (var z=0 ; z<Z ; z++) {
+	mu0[z] = nrand();
+	gamma0[z] = 0.5+numeric.seedrandom.random();
+	W[z] = numeric.rep([M, M], 0);
+	for (var i=0 ; i<M ; i++) {
+	    for (var j=i+1 ; j<M ; j++) {
+		W[z][i][j] = nrand();
+		W[z][j][i] = -W[z][i][j];
+	    }
+	}
+    }
+    for (var i=0 ; i<N ; i++) {
+	var Omega=numeric.rep([M, M], 0);
+	for (var z=0 ; z<Z ; z++) {
+	    numeric.addeq(Omega, numeric.mul(W[z], mu0[z]+gamma0[z]*nrand()));
+	}
+	try {
+	    eig[i] = numeric.eig(Omega);
+	} catch (e) {
+	    i -= 1;
+	    continue;
+	}
+    }
+    
+    for (var i=0 ; i<N ; i++) {
+	for (var j=0 ; j<M ; j++) {
+	    x[i][j] = nrand();
+	}
+	numeric.diveq(x[i], numeric.norm2(x[i]));
+    }
+}
+
+function init()
+{
+    init_numerics();
+
+    canvas = document.getElementById('sphere1');
+    
+    canvas.width = S;
+    canvas.height = S;
+    
+    var pos=2000;
+    camera = new THREE.PerspectiveCamera(25, canvas.clientWidth / canvas.clientWidth, pos-unitsize-ballradius, pos+unitsize+ballradius);
+    //camera = new THREE.PerspectiveCamera(25, canvas.clientWidth / canvas.clientWidth, pos-3*(unitsize+ballradius), pos+unitsize+ballradius);
+    camera.position.set(0, 0, pos);
+    
+    scene = new THREE.Scene();
+    
+    var geometry = new THREE.SphereGeometry(ballradius, 15, 15);
+    //var material = new THREE.MeshLambertMaterial({color: 0x005588});
+    var material = new THREE.MeshLambertMaterial({color: 0xd2691e});
+    //var material = new THREE.MeshDepthMaterial( { overdraw: true } );
+    for (var i=0 ; i<N ; i++) {
+	ball[i] = new THREE.Mesh(geometry, material);
+	ball[i].position.set(0, 0, 0);
+	scene.add(ball[i]);
+    }
+    
+    var sgeometry = new THREE.SphereGeometry(unitsize, 50, 50);
+    //var smaterial = new THREE.MeshLambertMaterial({color: 0x446644, opacity: 0.5, transparent: true});
+    var smaterial = new THREE.MeshLambertMaterial({color: 0xffb6c1, opacity: 0.5, transparent: true});
+    //var smaterial = new THREE.MeshDepthMaterial( { opacity: 0.5, transparent: true, overdraw: false, wireframe: true } );
+    var unitsphere = new THREE.Mesh(sgeometry, smaterial);
+    unitsphere.position.set(0, 0, 0);
+    scene.add(unitsphere);
+    
+    //var light = new THREE.DirectionalLight(0xaaccaa, 4);
+    var light = new THREE.DirectionalLight(0xff69b4, 4);
+    light.position.set(unitsize, 50, unitsize*2).normalize();
+    scene.add(light);
+    
+    renderer = new THREE.WebGLRenderer()
+    renderer.setSize(S, S);
+    canvas.appendChild(renderer.domElement);
+}
+
+function rk4(x, t, dt, derivs)
+{ 
+    var dxdt = derivs(t, x);
+    var xt = numeric.add(x, numeric.mul(dxdt, dt/2));
+    var dxt = derivs(t+dt/2, xt);
+    xt = numeric.add(x, numeric.mul(dxt, dt/2));
+    var dxm = derivs(t+dt/2, xt);
+    xt = numeric.add(x, numeric.mul(dxm, dt));
+    numeric.addeq(dxm, dxt);
+    dxt = derivs(t+dt, xt);
+    return numeric.add(x, numeric.mul(numeric.add(dxdt, dxt, numeric.mul(dxm, 2)), dt/6));
+} 
+
+function Omegatransform(eig, y, t)
+{
+    var Lambda = numeric.T.diag(eig.lambda.mul(t).exp());
+    var Ey = eig.E.transjugate().dot(y);
+    return eig.E.dot(Lambda.dot(Ey)).x;
+}
+
+function derivs(t, y)
+{
+    var dy = numeric.rep([N, M], 0);
+    var m = numeric.rep([M], 0);
+    for (var i=0 ; i<N ; i++) {
+	var x=Omegatransform(eig[i], y[i], t);
+	numeric.addeq(m, x);
+    }
+    numeric.diveq(m, N);
+    var r=numeric.dot(K, m);
+    for (var i=0 ; i<N ; i++) {
+	var r0=Omegatransform(eig[i], r, -t);
+	var r0y=numeric.dot(r0, y[i]);
+	dy[i] = numeric.add(numeric.mul(y[i], -r0y), r0);
+    }
+    return dy;
+}
+
+var interval=10, timer;
+
+function animate()
+{
+    var h;
+    if (!window.innerHeight) {
+	h = document.body.clientHeight;
+    } else {
+	h = window.innerHeight;
+    }
+    if ((!document.hasFocus || document.hasFocus()) && canvas.getBoundingClientRect().top<h && canvas.getBoundingClientRect().bottom>0) {
+	t += dt;
+	x = rk4(x, t, dt, derivs);
+	for (var i=0 ; i<N ; i++) {
+	    var xpresent=Omegatransform(eig[i], x[i], t);
+	    if (M==2) {
+		ball[i].position.set(xpresent[0]*unitsize, xpresent[1]*unitsize, 0);
+	    } else {
+		ball[i].position.set(xpresent[0]*unitsize, xpresent[1]*unitsize, xpresent[2]*unitsize);
+	    }
+	}
+	renderer.render(scene, camera);
+	clearTimeout(timer);
+	timer = setTimeout(animate, interval);
+    }
+    clearTimeout(timer);
+    timer = setTimeout(animate, interval);
+    //requestAnimationFrame(animate);
+}
